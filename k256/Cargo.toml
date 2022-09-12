@@ -30,7 +30,7 @@ sha3 = { version = "0.9", optional = true, default-features = false }
 
 [dev-dependencies]
 blobby = "0.3"
-criterion = "0.3"
+criterion = "0.4"
 ecdsa-core = { version = "=0.13.0-pre", package = "ecdsa", default-features = false, features = ["dev"] }
 hex-literal = "0.3"
 num-bigint = "0.4"
