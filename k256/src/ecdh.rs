@@ -26,19 +26,21 @@
 //!
 //! let alice_shared = alice_secret.diffie_hellman(&bob_public);
 //!
-//! // Bob deocdes Alice's serialized public key and computes the same shared secret
+//! // Bob decodes Alice's serialized public key and computes the same shared secret
 //! let alice_public = PublicKey::from_sec1_bytes(alice_pk_bytes.as_ref())
 //!     .expect("alice's public key is invalid!"); // In real usage, don't panic, handle this!
 //!
 //! let bob_shared = bob_secret.diffie_hellman(&alice_public);
 //!
 //! // Both participants arrive on the same shared secret
-//! assert_eq!(alice_shared.as_bytes(), bob_shared.as_bytes());
+//! assert_eq!(alice_shared.raw_secret_bytes(), bob_shared.raw_secret_bytes());
 //! ```
+
+pub use elliptic_curve::ecdh::diffie_hellman;
 
 use crate::{AffinePoint, Secp256k1};
 
-/// NIST P-256 Ephemeral Diffie-Hellman Secret.
+/// secp256k1 Ephemeral Diffie-Hellman Secret.
 pub type EphemeralSecret = elliptic_curve::ecdh::EphemeralSecret<Secp256k1>;
 
 /// Shared secret value computed via ECDH key agreement.

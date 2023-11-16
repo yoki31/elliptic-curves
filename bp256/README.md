@@ -1,4 +1,4 @@
-# RustCrypto: Brainpool P-256 elliptic curves
+# [RustCrypto]: Brainpool P-256 elliptic curves
 
 [![crate][crate-image]][crate-link]
 [![Docs][docs-image]][docs-link]
@@ -14,7 +14,7 @@ implemented in terms of traits from the [`elliptic-curve`] crate.
 
 ## Minimum Supported Rust Version
 
-Rust **1.56** or higher.
+Rust **1.65* or higher.
 
 Minimum supported Rust version can be changed in the future, but it will be
 done with a minor version bump.
@@ -41,12 +41,12 @@ dual licensed as above, without any additional terms or conditions.
 
 [//]: # (badges)
 
-[crate-image]: https://img.shields.io/crates/v/bp256.svg
+[crate-image]: https://buildstats.info/crate/bp256
 [crate-link]: https://crates.io/crates/bp256
 [docs-image]: https://docs.rs/bp256/badge.svg
 [docs-link]: https://docs.rs/bp256/
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[rustc-image]: https://img.shields.io/badge/rustc-1.56+-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.65+-blue.svg
 [chat-image]: https://img.shields.io/badge/zulip-join_chat-blue.svg
 [chat-link]: https://rustcrypto.zulipchat.com/#narrow/stream/260040-elliptic-curves
 [build-image]: https://github.com/RustCrypto/elliptic-curves/workflows/bp256/badge.svg?branch=master&event=push
@@ -54,4 +54,5 @@ dual licensed as above, without any additional terms or conditions.
 
 [//]: # (general links)
 
+[RustCrypto]: https://github.com/rustcrypto/
 [`elliptic-curve`]: https://github.com/RustCrypto/traits/tree/master/elliptic-curve

@@ -1,32 +1,35 @@
 [package]
 name = "bp256"
-version = "0.3.0-pre" # Also update html_root_url in lib.rs when bumping this
+version = "0.6.1"
 description = "Brainpool P-256 (brainpoolP256r1 and brainpoolP256t1) elliptic curves"
 authors = ["RustCrypto Developers"]
 license = "Apache-2.0 OR MIT"
-documentation = "https://docs.rs/elliptic-curve"
+documentation = "https://docs.rs/bp256"
 repository = "https://github.com/RustCrypto/elliptic-curves/tree/master/bp256"
 readme = "README.md"
 categories = ["cryptography", "no-std"]
 keywords = ["brainpool", "crypto", "ecc"]
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.65"
 
 [dependencies]
-elliptic-curve = { version = "0.11", default-features = false, features = ["hazmat", "sec1"] }
-sec1 = { version = "0.2", default-features = false }
+elliptic-curve = { version = "0.13", default-features = false, features = ["hazmat", "sec1"] }
 
 # optional dependencies
-ecdsa = { version = "=0.13.0-pre", optional = true, default-features = false, features = ["der"] }
-sha2 = { version = "0.9", optional = true, default-features = false }
+ecdsa = { version = "0.16", optional = true, default-features = false, features = ["der"] }
+primeorder = { version = "0.13.1", optional = true, path = "../primeorder" }
+sha2 = { version = "0.10", optional = true, default-features = false }
 
 [features]
 default = ["pkcs8", "std"]
+alloc = ["ecdsa?/alloc", "elliptic-curve/alloc"]
+std = ["alloc", "ecdsa?/std", "elliptic-curve/std"]
+
 pem = ["elliptic-curve/pem", "pkcs8"]
-pkcs8 = ["elliptic-curve/pkcs8"]
-serde = ["ecdsa/serde", "elliptic-curve/serde", "sec1/serde"]
+pkcs8 = ["ecdsa/pkcs8", "elliptic-curve/pkcs8"]
+serde = ["ecdsa/serde", "elliptic-curve/serde"]
 sha256 = ["ecdsa/digest", "ecdsa/hazmat", "sha2"]
-std = ["elliptic-curve/std"]
+wip-arithmetic-do-not-use = ["dep:primeorder"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,18 +1,16 @@
-# RustCrypto: NIST P-256 (secp256r1) elliptic curve
+# [RustCrypto]: NIST P-256 (secp256r1) elliptic curve
 
 [![crate][crate-image]][crate-link]
 [![Docs][docs-image]][docs-link]
+[![Build Status][build-image]][build-link]
 ![Apache2/MIT licensed][license-image]
 ![Rust Version][rustc-image]
 [![Project Chat][chat-image]][chat-link]
-[![Build Status][build-image]][build-link]
 
-NIST P-256 elliptic curve (a.k.a. prime256v1, secp256r1) types implemented
-in terms of traits from the [`elliptic-curve`] crate.
-
-Optionally includes an [`arithmetic`] feature providing scalar and
-affine/projective point types with support for constant-time scalar
-multiplication, which can be used to implement protocols such as [ECDH].
+Pure Rust implementation of the NIST P-256 (a.k.a. secp256r1, prime256v1)
+elliptic curve with support for ECDH, ECDSA signing/verification, and general
+purpose curve arithmetic support implemented in terms of traits from the
+[`elliptic-curve`] crate.
 
 [Documentation][docs-link]
 
@@ -36,10 +34,9 @@ USE AT YOUR OWN RISK!
 
 ## About NIST P-256
 
-NIST P-256 is a Weierstrass curve specified in FIPS 186-4: Digital Signature
-Standard (DSS):
-
-<https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-4.pdf>
+NIST P-256 is a Weierstrass curve specified in [SP 800-186]:
+Recommendations for Discrete Logarithm-based Cryptography:
+Elliptic Curve Domain Parameters.
 
 Also known as prime256v1 (ANSI X9.62) and secp256r1 (SECG), it's included in
 the US National Security Agency's "Suite B" and is widely used in protocols
@@ -47,7 +44,7 @@ like TLS and the associated X.509 PKI.
 
 ## Minimum Supported Rust Version
 
-Rust **1.56** or higher.
+Rust **1.65** or higher.
 
 Minimum supported Rust version can be changed in the future, but it will be
 done with a minor version bump.
@@ -74,20 +71,21 @@ dual licensed as above, without any additional terms or conditions.
 
 [//]: # (badges)
 
-[crate-image]: https://img.shields.io/crates/v/p256.svg
+[crate-image]: https://buildstats.info/crate/p256
 [crate-link]: https://crates.io/crates/p256
 [docs-image]: https://docs.rs/p256/badge.svg
 [docs-link]: https://docs.rs/p256/
+[build-image]: https://github.com/RustCrypto/elliptic-curves/actions/workflows/p256.yml/badge.svg
+[build-link]: https://github.com/RustCrypto/elliptic-curves/actions/workflows/p256.yml
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[rustc-image]: https://img.shields.io/badge/rustc-1.56+-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.65+-blue.svg
 [chat-image]: https://img.shields.io/badge/zulip-join_chat-blue.svg
 [chat-link]: https://rustcrypto.zulipchat.com/#narrow/stream/260040-elliptic-curves
-[build-image]: https://github.com/RustCrypto/elliptic-curves/workflows/p256/badge.svg?branch=master&event=push
-[build-link]: https://github.com/RustCrypto/elliptic-curves/actions?query=workflow%3Ap256
 
 [//]: # (general links)
 
+[RustCrypto]: https://github.com/rustcrypto/
 [`elliptic-curve`]: https://github.com/RustCrypto/traits/tree/master/elliptic-curve
-[`arithmetic`]: https://docs.rs/p256/latest/p256/arithmetic/index.html
 [ECDH]: https://en.wikipedia.org/wiki/Elliptic-curve_Diffie-Hellman
 [ECDSA]: https://en.wikipedia.org/wiki/Elliptic_Curve_Digital_Signature_Algorithm
+[SP 800-186]: https://csrc.nist.gov/publications/detail/sp/800-186/final

@@ -1,7 +1,7 @@
 //! Elliptic Curve Diffie-Hellman (Ephemeral) Support.
 //!
 //! This module contains a high-level interface for performing ephemeral
-//! Diffie-Hellman key exchanges using the secp256k1 elliptic curve.
+//! Diffie-Hellman key exchanges using the secp256r1 elliptic curve.
 //!
 //! # Usage
 //!
@@ -26,26 +26,22 @@
 //!
 //! let alice_shared = alice_secret.diffie_hellman(&bob_public);
 //!
-//! // Bob deocdes Alice's serialized public key and computes the same shared secret
+//! // Bob decodes Alice's serialized public key and computes the same shared secret
 //! let alice_public = PublicKey::from_sec1_bytes(alice_pk_bytes.as_ref())
 //!     .expect("alice's public key is invalid!"); // In real usage, don't panic, handle this!
 //!
 //! let bob_shared = bob_secret.diffie_hellman(&alice_public);
 //!
 //! // Both participants arrive on the same shared secret
-//! assert_eq!(alice_shared.as_bytes(), bob_shared.as_bytes());
+//! assert_eq!(alice_shared.raw_secret_bytes(), bob_shared.raw_secret_bytes());
 //! ```
 
-use crate::{AffinePoint, NistP256};
+pub use elliptic_curve::ecdh::diffie_hellman;
+
+use crate::NistP256;
 
 /// NIST P-256 Ephemeral Diffie-Hellman Secret.
 pub type EphemeralSecret = elliptic_curve::ecdh::EphemeralSecret<NistP256>;
 
 /// Shared secret value computed via ECDH key agreement.
 pub type SharedSecret = elliptic_curve::ecdh::SharedSecret<NistP256>;
-
-impl From<&AffinePoint> for SharedSecret {
-    fn from(affine: &AffinePoint) -> SharedSecret {
-        affine.x.to_bytes().into()
-    }
-}

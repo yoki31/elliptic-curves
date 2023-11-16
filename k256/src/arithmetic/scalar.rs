@@ -6,38 +6,37 @@ mod wide;
 
 pub(crate) use self::wide::WideScalar;
 
-use crate::{FieldBytes, Secp256k1, ORDER};
-use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Shr, Sub, SubAssign};
+use crate::{FieldBytes, Secp256k1, WideBytes, ORDER, ORDER_HEX};
+use core::{
+    iter::{Product, Sum},
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Shr, ShrAssign, Sub, SubAssign},
+};
 use elliptic_curve::{
-    bigint::{nlimbs, prelude::*, Limb, LimbUInt, U256},
-    generic_array::arr,
-    group::ff::{Field, PrimeField},
-    ops::Reduce,
-    rand_core::{CryptoRng, RngCore},
+    bigint::{prelude::*, Limb, Word, U256, U512},
+    ff::{self, Field, PrimeField},
+    ops::{Invert, Reduce, ReduceNonZero},
+    rand_core::{CryptoRngCore, RngCore},
+    scalar::{FromUintUnchecked, IsHigh},
     subtle::{
         Choice, ConditionallySelectable, ConstantTimeEq, ConstantTimeGreater, ConstantTimeLess,
         CtOption,
     },
     zeroize::DefaultIsZeroes,
-    Curve, IsHigh, ScalarArithmetic, ScalarCore,
+    Curve, ScalarPrimitive,
 };
 
 #[cfg(feature = "bits")]
 use {crate::ScalarBits, elliptic_curve::group::ff::PrimeFieldBits};
 
 #[cfg(feature = "serde")]
-use elliptic_curve::serde::{de, ser, Deserialize, Serialize};
+use serdect::serde::{de, ser, Deserialize, Serialize};
 
 #[cfg(test)]
 use num_bigint::{BigUint, ToBigUint};
 
-impl ScalarArithmetic for Secp256k1 {
-    type Scalar = Scalar;
-}
-
 /// Constant representing the modulus
 /// n = FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE BAAEDCE6 AF48A03B BFD25E8C D0364141
-const MODULUS: [LimbUInt; nlimbs!(256)] = ORDER.to_uint_array();
+const MODULUS: [Word; U256::LIMBS] = ORDER.to_words();
 
 /// Constant representing the modulus / 2
 const FRAC_MODULUS_2: U256 = ORDER.shr_vartime(1);
@@ -60,149 +59,21 @@ const FRAC_MODULUS_2: U256 = ORDER.shr_vartime(1);
 /// - [`PrimeField`](https://docs.rs/ff/latest/ff/trait.PrimeField.html) -
 ///   represents elements of prime fields and provides:
 ///   - `from_repr`/`to_repr` for converting field elements from/to big integers.
-///   - `char_le_bits`, `multiplicative_generator`, `root_of_unity` constants.
+///   - `multiplicative_generator` and `root_of_unity` constants.
 /// - [`PrimeFieldBits`](https://docs.rs/ff/latest/ff/trait.PrimeFieldBits.html) -
 ///   operations over field elements represented as bits (requires `bits` feature)
 ///
 /// Please see the documentation for the relevant traits for more information.
-#[derive(Clone, Copy, Debug, Default)]
-#[cfg_attr(docsrs, doc(cfg(feature = "arithmetic")))]
-pub struct Scalar(U256);
-
-impl Field for Scalar {
-    fn random(rng: impl RngCore) -> Self {
-        // Uses rejection sampling as the default random generation method,
-        // which produces a uniformly random distribution of scalars.
-        //
-        // This method is not constant time, but should be secure so long as
-        // rejected RNG outputs are unrelated to future ones (which is a
-        // necessary property of a `CryptoRng`).
-        //
-        // With an unbiased RNG, the probability of failing to complete after 4
-        // iterations is vanishingly small.
-        Self::generate_vartime(rng)
-    }
-
-    fn zero() -> Self {
-        Self::ZERO
-    }
-
-    fn one() -> Self {
-        Self::ONE
-    }
-
-    #[must_use]
-    fn square(&self) -> Self {
-        Scalar::square(self)
-    }
-
-    #[must_use]
-    fn double(&self) -> Self {
-        self.add(self)
-    }
-
-    fn invert(&self) -> CtOption<Self> {
-        Scalar::invert(self)
-    }
-
-    /// Tonelli-Shank's algorithm for q mod 16 = 1
-    /// https://eprint.iacr.org/2012/685.pdf (page 12, algorithm 5)
-    #[allow(clippy::many_single_char_names)]
-    fn sqrt(&self) -> CtOption<Self> {
-        // Note: `pow_vartime` is constant-time with respect to `self`
-        let w = self.pow_vartime(&[
-            0x777fa4bd19a06c82,
-            0xfd755db9cd5e9140,
-            0xffffffffffffffff,
-            0x1ffffffffffffff,
-        ]);
-
-        let mut v = Self::S;
-        let mut x = *self * w;
-        let mut b = x * w;
-        let mut z = Self::root_of_unity();
-
-        for max_v in (1..=Self::S).rev() {
-            let mut k = 1;
-            let mut tmp = b.square();
-            let mut j_less_than_v = Choice::from(1);
-
-            for j in 2..max_v {
-                let tmp_is_one = tmp.ct_eq(&Self::one());
-                let squared = Self::conditional_select(&tmp, &z, tmp_is_one).square();
-                tmp = Self::conditional_select(&squared, &tmp, tmp_is_one);
-                let new_z = Self::conditional_select(&z, &squared, tmp_is_one);
-                j_less_than_v &= !j.ct_eq(&v);
-                k = u32::conditional_select(&j, &k, tmp_is_one);
-                z = Self::conditional_select(&z, &new_z, j_less_than_v);
-            }
-
-            let result = x * z;
-            x = Self::conditional_select(&result, &x, b.ct_eq(&Self::one()));
-            z = z.square();
-            b *= z;
-            v = k;
-        }
-
-        CtOption::new(x, x.square().ct_eq(self))
-    }
-}
-
-impl PrimeField for Scalar {
-    type Repr = FieldBytes;
-
-    const NUM_BITS: u32 = 256;
-    const CAPACITY: u32 = 255;
-    const S: u32 = 6;
-
-    /// Attempts to parse the given byte array as an SEC1-encoded scalar.
-    ///
-    /// Returns None if the byte array does not contain a big-endian integer in the range
-    /// [0, p).
-    fn from_repr(bytes: FieldBytes) -> CtOption<Self> {
-        let inner = U256::from_be_byte_array(bytes);
-        CtOption::new(Self(inner), inner.ct_lt(&Secp256k1::ORDER))
-    }
-
-    fn to_repr(&self) -> FieldBytes {
-        self.to_bytes()
-    }
-
-    fn is_odd(&self) -> Choice {
-        self.0.is_odd()
-    }
-
-    fn multiplicative_generator() -> Self {
-        7u64.into()
-    }
-
-    fn root_of_unity() -> Self {
-        Scalar::from_repr(arr![u8;
-            0x0c, 0x1d, 0xc0, 0x60, 0xe7, 0xa9, 0x19, 0x86, 0xdf, 0x98, 0x79, 0xa3, 0xfb, 0xc4,
-            0x83, 0xa8, 0x98, 0xbd, 0xea, 0xb6, 0x80, 0x75, 0x60, 0x45, 0x99, 0x2f, 0x4b, 0x54,
-            0x02, 0xb0, 0x52, 0xf2
-        ])
-        .unwrap()
-    }
-}
-
-#[cfg(feature = "bits")]
-#[cfg_attr(docsrs, doc(cfg(feature = "bits")))]
-impl PrimeFieldBits for Scalar {
-    #[cfg(target_pointer_width = "32")]
-    type ReprBits = [u32; 8];
-
-    #[cfg(target_pointer_width = "64")]
-    type ReprBits = [u64; 4];
-
-    fn to_le_bits(&self) -> ScalarBits {
-        self.into()
-    }
-
-    fn char_le_bits() -> ScalarBits {
-        ORDER.to_uint_array().into()
-    }
-}
+///
+/// # `serde` support
+///
+/// When the `serde` feature of this crate is enabled, the `Serialize` and
+/// `Deserialize` traits are impl'd for this type.
+///
+/// The serialization is a fixed-width big endian encoding. When used with
+/// textual formats, the binary data is encoded as hexadecimal.
+#[derive(Clone, Copy, Debug, Default, PartialOrd, Ord)]
+pub struct Scalar(pub(crate) U256);
 
 impl Scalar {
     /// Zero scalar.
@@ -273,7 +144,7 @@ impl Scalar {
         let x56 = x28.pow2k(28).mul(&x28);
 
         #[rustfmt::skip]
-        let res = x56
+            let res = x56
             .pow2k(56).mul(&x56)
             .pow2k(14).mul(&x14)
             .pow2k(3).mul(&x_101)
@@ -307,11 +178,11 @@ impl Scalar {
     /// Returns the scalar modulus as a `BigUint` object.
     #[cfg(test)]
     pub fn modulus_as_biguint() -> BigUint {
-        Self::one().negate().to_biguint().unwrap() + 1.to_biguint().unwrap()
+        Self::ONE.negate().to_biguint().unwrap() + 1.to_biguint().unwrap()
     }
 
     /// Returns a (nearly) uniformly-random scalar, generated in constant time.
-    pub fn generate_biased(mut rng: impl CryptoRng + RngCore) -> Self {
+    pub fn generate_biased(rng: &mut impl CryptoRngCore) -> Self {
         // We reduce a random 512-bit value into a 256-bit field, which results in a
         // negligible bias from the uniform distribution, but the process is constant-time.
         let mut buf = [0u8; 64];
@@ -321,7 +192,7 @@ impl Scalar {
 
     /// Returns a uniformly-random scalar, generated using rejection sampling.
     // TODO(tarcieri): make this a `CryptoRng` when `ff` allows it
-    pub fn generate_vartime(mut rng: impl RngCore) -> Self {
+    pub fn generate_vartime(rng: &mut impl RngCore) -> Self {
         let mut bytes = FieldBytes::default();
 
         // TODO: pre-generate several scalars to bring the probability of non-constant-timeness down?
@@ -349,11 +220,151 @@ impl Scalar {
     }
 }
 
+impl Field for Scalar {
+    const ZERO: Self = Self::ZERO;
+    const ONE: Self = Self::ONE;
+
+    fn random(mut rng: impl RngCore) -> Self {
+        // Uses rejection sampling as the default random generation method,
+        // which produces a uniformly random distribution of scalars.
+        //
+        // This method is not constant time, but should be secure so long as
+        // rejected RNG outputs are unrelated to future ones (which is a
+        // necessary property of a `CryptoRng`).
+        //
+        // With an unbiased RNG, the probability of failing to complete after 4
+        // iterations is vanishingly small.
+        Self::generate_vartime(&mut rng)
+    }
+
+    #[must_use]
+    fn square(&self) -> Self {
+        Scalar::square(self)
+    }
+
+    #[must_use]
+    fn double(&self) -> Self {
+        self.add(self)
+    }
+
+    fn invert(&self) -> CtOption<Self> {
+        Scalar::invert(self)
+    }
+
+    /// Tonelli-Shank's algorithm for q mod 16 = 1
+    /// <https://eprint.iacr.org/2012/685.pdf> (page 12, algorithm 5)
+    #[allow(clippy::many_single_char_names)]
+    fn sqrt(&self) -> CtOption<Self> {
+        // Note: `pow_vartime` is constant-time with respect to `self`
+        let w = self.pow_vartime([
+            0x777fa4bd19a06c82,
+            0xfd755db9cd5e9140,
+            0xffffffffffffffff,
+            0x1ffffffffffffff,
+        ]);
+
+        let mut v = Self::S;
+        let mut x = *self * w;
+        let mut b = x * w;
+        let mut z = Self::ROOT_OF_UNITY;
+
+        for max_v in (1..=Self::S).rev() {
+            let mut k = 1;
+            let mut tmp = b.square();
+            let mut j_less_than_v = Choice::from(1);
+
+            for j in 2..max_v {
+                let tmp_is_one = tmp.ct_eq(&Self::ONE);
+                let squared = Self::conditional_select(&tmp, &z, tmp_is_one).square();
+                tmp = Self::conditional_select(&squared, &tmp, tmp_is_one);
+                let new_z = Self::conditional_select(&z, &squared, tmp_is_one);
+                j_less_than_v &= !j.ct_eq(&v);
+                k = u32::conditional_select(&j, &k, tmp_is_one);
+                z = Self::conditional_select(&z, &new_z, j_less_than_v);
+            }
+
+            let result = x * z;
+            x = Self::conditional_select(&result, &x, b.ct_eq(&Self::ONE));
+            z = z.square();
+            b *= z;
+            v = k;
+        }
+
+        CtOption::new(x, x.square().ct_eq(self))
+    }
+
+    fn sqrt_ratio(num: &Self, div: &Self) -> (Choice, Self) {
+        ff::helpers::sqrt_ratio_generic(num, div)
+    }
+}
+
+impl AsRef<Scalar> for Scalar {
+    fn as_ref(&self) -> &Scalar {
+        self
+    }
+}
+
+impl PrimeField for Scalar {
+    type Repr = FieldBytes;
+
+    const MODULUS: &'static str = ORDER_HEX;
+    const NUM_BITS: u32 = 256;
+    const CAPACITY: u32 = 255;
+    const TWO_INV: Self = Self(U256::from_be_hex(
+        "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a1",
+    ));
+    const MULTIPLICATIVE_GENERATOR: Self = Self(U256::from_u8(7));
+    const S: u32 = 6;
+    const ROOT_OF_UNITY: Self = Self(U256::from_be_hex(
+        "0c1dc060e7a91986df9879a3fbc483a898bdeab680756045992f4b5402b052f2",
+    ));
+    const ROOT_OF_UNITY_INV: Self = Self(U256::from_be_hex(
+        "fd3ae181f12d7096efc7b0c75b8cbb7277a275910aa413c3b6fb30a0884f0d1c",
+    ));
+    const DELTA: Self = Self(U256::from_be_hex(
+        "0000000000000000000cbc21fe4561c8d63b78e780e1341e199417c8c0bb7601",
+    ));
+
+    /// Attempts to parse the given byte array as an SEC1-encoded scalar.
+    ///
+    /// Returns None if the byte array does not contain a big-endian integer in the range
+    /// [0, p).
+    fn from_repr(bytes: FieldBytes) -> CtOption<Self> {
+        let inner = U256::from_be_byte_array(bytes);
+        CtOption::new(Self(inner), inner.ct_lt(&Secp256k1::ORDER))
+    }
+
+    fn to_repr(&self) -> FieldBytes {
+        self.to_bytes()
+    }
+
+    fn is_odd(&self) -> Choice {
+        self.0.is_odd()
+    }
+}
+
+#[cfg(feature = "bits")]
+impl PrimeFieldBits for Scalar {
+    #[cfg(target_pointer_width = "32")]
+    type ReprBits = [u32; 8];
+
+    #[cfg(target_pointer_width = "64")]
+    type ReprBits = [u64; 4];
+
+    fn to_le_bits(&self) -> ScalarBits {
+        self.into()
+    }
+
+    fn char_le_bits() -> ScalarBits {
+        ORDER.to_words().into()
+    }
+}
+
 impl DefaultIsZeroes for Scalar {}
 
 impl From<u32> for Scalar {
     fn from(k: u32) -> Self {
-        Self::from(k as u64)
+        Self(k.into())
     }
 }
 
@@ -363,39 +374,113 @@ impl From<u64> for Scalar {
     }
 }
 
-impl From<ScalarCore<Secp256k1>> for Scalar {
-    fn from(scalar: ScalarCore<Secp256k1>) -> Scalar {
+impl From<u128> for Scalar {
+    fn from(k: u128) -> Self {
+        Self(k.into())
+    }
+}
+
+impl From<ScalarPrimitive<Secp256k1>> for Scalar {
+    fn from(scalar: ScalarPrimitive<Secp256k1>) -> Scalar {
         Scalar(*scalar.as_uint())
     }
 }
 
-impl From<&ScalarCore<Secp256k1>> for Scalar {
-    fn from(scalar: &ScalarCore<Secp256k1>) -> Scalar {
+impl From<&ScalarPrimitive<Secp256k1>> for Scalar {
+    fn from(scalar: &ScalarPrimitive<Secp256k1>) -> Scalar {
         Scalar(*scalar.as_uint())
     }
 }
 
-impl From<Scalar> for ScalarCore<Secp256k1> {
-    fn from(scalar: Scalar) -> ScalarCore<Secp256k1> {
-        ScalarCore::from(&scalar)
+impl From<Scalar> for ScalarPrimitive<Secp256k1> {
+    fn from(scalar: Scalar) -> ScalarPrimitive<Secp256k1> {
+        ScalarPrimitive::from(&scalar)
     }
 }
 
-impl From<&Scalar> for ScalarCore<Secp256k1> {
-    fn from(scalar: &Scalar) -> ScalarCore<Secp256k1> {
-        ScalarCore::new(scalar.0).unwrap()
+impl From<&Scalar> for ScalarPrimitive<Secp256k1> {
+    fn from(scalar: &Scalar) -> ScalarPrimitive<Secp256k1> {
+        ScalarPrimitive::new(scalar.0).unwrap()
+    }
+}
+
+impl FromUintUnchecked for Scalar {
+    type Uint = U256;
+
+    fn from_uint_unchecked(uint: Self::Uint) -> Self {
+        Self(uint)
+    }
+}
+
+impl Invert for Scalar {
+    type Output = CtOption<Self>;
+
+    fn invert(&self) -> CtOption<Self> {
+        self.invert()
+    }
+
+    /// Fast variable-time inversion using Stein's algorithm.
+    ///
+    /// Returns none if the scalar is zero.
+    ///
+    /// <https://link.springer.com/article/10.1007/s13389-016-0135-4>
+    ///
+    /// ⚠️ WARNING!
+    ///
+    /// This method should not be used with (unblinded) secret scalars, as its
+    /// variable-time operation can potentially leak secrets through
+    /// sidechannels.
+    #[allow(non_snake_case)]
+    fn invert_vartime(&self) -> CtOption<Self> {
+        let mut u = *self;
+        let mut v = Self::from_uint_unchecked(Secp256k1::ORDER);
+        let mut A = Self::ONE;
+        let mut C = Self::ZERO;
+
+        while !bool::from(u.is_zero()) {
+            // u-loop
+            while bool::from(u.is_even()) {
+                u >>= 1;
+
+                let was_odd: bool = A.is_odd().into();
+                A >>= 1;
+
+                if was_odd {
+                    A += Self::from_uint_unchecked(FRAC_MODULUS_2);
+                    A += Self::ONE;
+                }
+            }
+
+            // v-loop
+            while bool::from(v.is_even()) {
+                v >>= 1;
+
+                let was_odd: bool = C.is_odd().into();
+                C >>= 1;
+
+                if was_odd {
+                    C += Self::from_uint_unchecked(FRAC_MODULUS_2);
+                    C += Self::ONE;
+                }
+            }
+
+            // sub-step
+            if u >= v {
+                u -= &v;
+                A -= &C;
+            } else {
+                v -= &u;
+                C -= &A;
+            }
+        }
+
+        CtOption::new(C, !self.is_zero())
     }
 }
 
 impl IsHigh for Scalar {
     fn is_high(&self) -> Choice {
         self.0.ct_gt(&FRAC_MODULUS_2)
-    }
-}
-
-impl From<Scalar> for U256 {
-    fn from(scalar: Scalar) -> U256 {
-        scalar.0
     }
 }
 
@@ -412,6 +497,12 @@ impl Shr<usize> for &Scalar {
 
     fn shr(self, rhs: usize) -> Self::Output {
         self.shr_vartime(rhs)
+    }
+}
+
+impl ShrAssign<usize> for Scalar {
+    fn shr_assign(&mut self, rhs: usize) {
+        *self = *self >> rhs;
     }
 }
 
@@ -568,18 +659,85 @@ impl MulAssign<&Scalar> for Scalar {
 }
 
 impl Reduce<U256> for Scalar {
-    fn from_uint_reduced(w: U256) -> Self {
+    type Bytes = FieldBytes;
+
+    fn reduce(w: U256) -> Self {
         let (r, underflow) = w.sbb(&ORDER, Limb::ZERO);
-        let underflow = Choice::from((underflow.0 >> (Limb::BIT_SIZE - 1)) as u8);
+        let underflow = Choice::from((underflow.0 >> (Limb::BITS - 1)) as u8);
         Self(U256::conditional_select(&w, &r, !underflow))
+    }
+
+    #[inline]
+    fn reduce_bytes(bytes: &FieldBytes) -> Self {
+        Self::reduce(U256::from_be_byte_array(*bytes))
+    }
+}
+
+impl Reduce<U512> for Scalar {
+    type Bytes = WideBytes;
+
+    fn reduce(w: U512) -> Self {
+        WideScalar(w).reduce()
+    }
+
+    fn reduce_bytes(bytes: &WideBytes) -> Self {
+        Self::reduce(U512::from_be_byte_array(*bytes))
+    }
+}
+
+impl ReduceNonZero<U256> for Scalar {
+    fn reduce_nonzero(w: U256) -> Self {
+        const ORDER_MINUS_ONE: U256 = ORDER.wrapping_sub(&U256::ONE);
+        let (r, underflow) = w.sbb(&ORDER_MINUS_ONE, Limb::ZERO);
+        let underflow = Choice::from((underflow.0 >> (Limb::BITS - 1)) as u8);
+        Self(U256::conditional_select(&w, &r, !underflow).wrapping_add(&U256::ONE))
+    }
+
+    #[inline]
+    fn reduce_nonzero_bytes(bytes: &FieldBytes) -> Self {
+        Self::reduce_nonzero(U256::from_be_byte_array(*bytes))
+    }
+}
+
+impl ReduceNonZero<U512> for Scalar {
+    fn reduce_nonzero(w: U512) -> Self {
+        WideScalar(w).reduce_nonzero()
+    }
+
+    #[inline]
+    fn reduce_nonzero_bytes(bytes: &WideBytes) -> Self {
+        Self::reduce_nonzero(U512::from_be_byte_array(*bytes))
+    }
+}
+
+impl Sum for Scalar {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.reduce(core::ops::Add::add).unwrap_or(Self::ZERO)
+    }
+}
+
+impl<'a> Sum<&'a Scalar> for Scalar {
+    fn sum<I: Iterator<Item = &'a Scalar>>(iter: I) -> Self {
+        iter.copied().sum()
+    }
+}
+
+impl Product for Scalar {
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.reduce(core::ops::Mul::mul).unwrap_or(Self::ONE)
+    }
+}
+
+impl<'a> Product<&'a Scalar> for Scalar {
+    fn product<I: Iterator<Item = &'a Scalar>>(iter: I) -> Self {
+        iter.copied().product()
     }
 }
 
 #[cfg(feature = "bits")]
-#[cfg_attr(docsrs, doc(cfg(feature = "bits")))]
 impl From<&Scalar> for ScalarBits {
     fn from(scalar: &Scalar) -> ScalarBits {
-        scalar.0.to_uint_array().into()
+        scalar.0.to_words().into()
     }
 }
 
@@ -595,38 +753,60 @@ impl From<&Scalar> for FieldBytes {
     }
 }
 
+impl From<Scalar> for U256 {
+    fn from(scalar: Scalar) -> Self {
+        scalar.0
+    }
+}
+
+impl From<&Scalar> for U256 {
+    fn from(scalar: &Scalar) -> Self {
+        scalar.0
+    }
+}
+
 #[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl Serialize for Scalar {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: ser::Serializer,
     {
-        ScalarCore::from(self).serialize(serializer)
+        ScalarPrimitive::from(self).serialize(serializer)
     }
 }
 
 #[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl<'de> Deserialize<'de> for Scalar {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: de::Deserializer<'de>,
     {
-        Ok(ScalarCore::deserialize(deserializer)?.into())
+        Ok(ScalarPrimitive::deserialize(deserializer)?.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Scalar;
-    use crate::arithmetic::dev::{biguint_to_bytes, bytes_to_biguint};
+    use crate::{
+        arithmetic::dev::{biguint_to_bytes, bytes_to_biguint},
+        FieldBytes, NonZeroScalar, WideBytes, ORDER,
+    };
     use elliptic_curve::{
+        bigint::{ArrayEncoding, U256, U512},
         ff::{Field, PrimeField},
-        IsHigh,
+        generic_array::GenericArray,
+        ops::{Invert, Reduce},
+        scalar::IsHigh,
     };
     use num_bigint::{BigUint, ToBigUint};
+    use num_traits::Zero;
     use proptest::prelude::*;
+    use rand_core::OsRng;
+
+    #[cfg(feature = "alloc")]
+    use alloc::vec::Vec;
+    use elliptic_curve::ops::BatchInvert;
 
     impl From<&BigUint> for Scalar {
         fn from(x: &BigUint) -> Self {
@@ -648,10 +828,52 @@ mod tests {
         }
     }
 
+    /// t = (modulus - 1) >> S
+    const T: [u64; 4] = [
+        0xeeff497a3340d905,
+        0xfaeabb739abd2280,
+        0xffffffffffffffff,
+        0x03ffffffffffffff,
+    ];
+
+    #[test]
+    fn two_inv_constant() {
+        assert_eq!(Scalar::from(2u32) * Scalar::TWO_INV, Scalar::ONE);
+    }
+
+    #[test]
+    fn root_of_unity_constant() {
+        // ROOT_OF_UNITY^{2^s} mod m == 1
+        assert_eq!(
+            Scalar::ROOT_OF_UNITY.pow_vartime(&[1u64 << Scalar::S, 0, 0, 0]),
+            Scalar::ONE
+        );
+
+        // MULTIPLICATIVE_GENERATOR^{t} mod m == ROOT_OF_UNITY
+        assert_eq!(
+            Scalar::MULTIPLICATIVE_GENERATOR.pow_vartime(&T),
+            Scalar::ROOT_OF_UNITY
+        )
+    }
+
+    #[test]
+    fn root_of_unity_inv_constant() {
+        assert_eq!(
+            Scalar::ROOT_OF_UNITY * Scalar::ROOT_OF_UNITY_INV,
+            Scalar::ONE
+        );
+    }
+
+    #[test]
+    fn delta_constant() {
+        // DELTA^{t} mod m == 1
+        assert_eq!(Scalar::DELTA.pow_vartime(&T), Scalar::ONE);
+    }
+
     #[test]
     fn is_high() {
         // 0 is not high
-        let high: bool = Scalar::zero().is_high().into();
+        let high: bool = Scalar::ZERO.is_high().into();
         assert!(!high);
 
         // 1 is not high
@@ -685,17 +907,88 @@ mod tests {
         }
     }
 
+    /// Basic tests that `invert` works.
+    #[test]
+    fn invert() {
+        assert_eq!(Scalar::ONE, Scalar::ONE.invert().unwrap());
+
+        let three = Scalar::from(3u64);
+        let inv_three = three.invert().unwrap();
+        assert_eq!(three * inv_three, Scalar::ONE);
+
+        let minus_three = -three;
+        let inv_minus_three = minus_three.invert().unwrap();
+        assert_eq!(inv_minus_three, -inv_three);
+        assert_eq!(three * inv_minus_three, -Scalar::ONE);
+
+        assert!(bool::from(Scalar::ZERO.invert().is_none()));
+        assert_eq!(Scalar::from(2u64).invert().unwrap(), Scalar::TWO_INV);
+        assert_eq!(
+            Scalar::ROOT_OF_UNITY.invert_vartime().unwrap(),
+            Scalar::ROOT_OF_UNITY_INV
+        );
+    }
+
+    /// Basic tests that `invert_vartime` works.
+    #[test]
+    fn invert_vartime() {
+        assert_eq!(Scalar::ONE, Scalar::ONE.invert_vartime().unwrap());
+
+        let three = Scalar::from(3u64);
+        let inv_three = three.invert_vartime().unwrap();
+        assert_eq!(three * inv_three, Scalar::ONE);
+
+        let minus_three = -three;
+        let inv_minus_three = minus_three.invert_vartime().unwrap();
+        assert_eq!(inv_minus_three, -inv_three);
+        assert_eq!(three * inv_minus_three, -Scalar::ONE);
+
+        assert!(bool::from(Scalar::ZERO.invert_vartime().is_none()));
+        assert_eq!(
+            Scalar::from(2u64).invert_vartime().unwrap(),
+            Scalar::TWO_INV
+        );
+        assert_eq!(
+            Scalar::ROOT_OF_UNITY.invert_vartime().unwrap(),
+            Scalar::ROOT_OF_UNITY_INV
+        );
+    }
+
+    #[test]
+    fn batch_invert_array() {
+        let k: Scalar = Scalar::random(&mut OsRng);
+        let l: Scalar = Scalar::random(&mut OsRng);
+
+        let expected = [k.invert().unwrap(), l.invert().unwrap()];
+        assert_eq!(
+            <Scalar as BatchInvert<_>>::batch_invert(&[k, l]).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn batch_invert() {
+        let k: Scalar = Scalar::random(&mut OsRng);
+        let l: Scalar = Scalar::random(&mut OsRng);
+
+        let expected = vec![k.invert().unwrap(), l.invert().unwrap()];
+        let scalars = vec![k, l];
+        let res: Vec<_> = <Scalar as BatchInvert<_>>::batch_invert(scalars.as_slice()).unwrap();
+        assert_eq!(res, expected);
+    }
+
     #[test]
     fn negate() {
-        let zero_neg = -Scalar::zero();
-        assert_eq!(zero_neg, Scalar::zero());
+        let zero_neg = -Scalar::ZERO;
+        assert_eq!(zero_neg, Scalar::ZERO);
 
         let m = Scalar::modulus_as_biguint();
         let one = 1.to_biguint().unwrap();
         let m_minus_one = &m - &one;
         let m_by_2 = &m >> 1;
 
-        let one_neg = -Scalar::one();
+        let one_neg = -Scalar::ONE;
         assert_eq!(one_neg, Scalar::from(&m_minus_one));
 
         let frac_modulus_2_neg = -Scalar::from(&m_by_2);
@@ -703,7 +996,7 @@ mod tests {
         assert_eq!(frac_modulus_2_neg, frac_modulus_2_plus_one);
 
         let modulus_minus_one_neg = -Scalar::from(&m - &one);
-        assert_eq!(modulus_minus_one_neg, Scalar::one());
+        assert_eq!(modulus_minus_one_neg, Scalar::ONE);
     }
 
     #[test]
@@ -739,16 +1032,97 @@ mod tests {
         assert_eq!((a - &a).is_zero().unwrap_u8(), 1);
     }
 
+    #[test]
+    fn from_bytes_reduced() {
+        let m = Scalar::modulus_as_biguint();
+
+        fn reduce<T: Reduce<U256, Bytes = FieldBytes>>(arr: &[u8]) -> T {
+            T::reduce_bytes(GenericArray::from_slice(arr))
+        }
+
+        // Regular reduction
+
+        let s = reduce::<Scalar>(&[0xffu8; 32]).to_biguint().unwrap();
+        assert!(s < m);
+
+        let s = reduce::<Scalar>(&[0u8; 32]).to_biguint().unwrap();
+        assert!(s.is_zero());
+
+        let s = reduce::<Scalar>(&ORDER.to_be_byte_array())
+            .to_biguint()
+            .unwrap();
+        assert!(s.is_zero());
+
+        // Reduction to a non-zero scalar
+
+        let s = reduce::<NonZeroScalar>(&[0xffu8; 32]).to_biguint().unwrap();
+        assert!(s < m);
+
+        let s = reduce::<NonZeroScalar>(&[0u8; 32]).to_biguint().unwrap();
+        assert!(s < m);
+        assert!(!s.is_zero());
+
+        let s = reduce::<NonZeroScalar>(&ORDER.to_be_byte_array())
+            .to_biguint()
+            .unwrap();
+        assert!(s < m);
+        assert!(!s.is_zero());
+
+        let s = reduce::<NonZeroScalar>(&(ORDER.wrapping_sub(&U256::ONE)).to_be_byte_array())
+            .to_biguint()
+            .unwrap();
+        assert!(s < m);
+        assert!(!s.is_zero());
+    }
+
+    #[test]
+    fn from_wide_bytes_reduced() {
+        let m = Scalar::modulus_as_biguint();
+
+        fn reduce<T: Reduce<U512, Bytes = WideBytes>>(slice: &[u8]) -> T {
+            let mut bytes = WideBytes::default();
+            bytes[(64 - slice.len())..].copy_from_slice(slice);
+            T::reduce_bytes(&bytes)
+        }
+
+        // Regular reduction
+
+        let s = reduce::<Scalar>(&[0xffu8; 64]).to_biguint().unwrap();
+        assert!(s < m);
+
+        let s = reduce::<Scalar>(&[0u8; 64]).to_biguint().unwrap();
+        assert!(s.is_zero());
+
+        let s = reduce::<Scalar>(&ORDER.to_be_byte_array())
+            .to_biguint()
+            .unwrap();
+        assert!(s.is_zero());
+
+        // Reduction to a non-zero scalar
+
+        let s = reduce::<NonZeroScalar>(&[0xffu8; 64]).to_biguint().unwrap();
+        assert!(s < m);
+
+        let s = reduce::<NonZeroScalar>(&[0u8; 64]).to_biguint().unwrap();
+        assert!(s < m);
+        assert!(!s.is_zero());
+
+        let s = reduce::<NonZeroScalar>(&ORDER.to_be_byte_array())
+            .to_biguint()
+            .unwrap();
+        assert!(s < m);
+        assert!(!s.is_zero());
+
+        let s = reduce::<NonZeroScalar>(&(ORDER.wrapping_sub(&U256::ONE)).to_be_byte_array())
+            .to_biguint()
+            .unwrap();
+        assert!(s < m);
+        assert!(!s.is_zero());
+    }
+
     prop_compose! {
         fn scalar()(bytes in any::<[u8; 32]>()) -> Scalar {
-            let mut res = bytes_to_biguint(&bytes);
-            let m = Scalar::modulus_as_biguint();
-            // Modulus is 256 bit long, same as the maximum `res`,
-            // so this is guaranteed to land us in the correct range.
-            if res >= m {
-                res -= m;
-            }
-            Scalar::from(&res)
+            <Scalar as Reduce<U256>>::reduce_bytes(&bytes.into())
         }
     }
 
@@ -830,12 +1204,30 @@ mod tests {
         fn fuzzy_invert(
             a in scalar()
         ) {
-            let a = if bool::from(a.is_zero()) { Scalar::one() } else { a };
+            let a = if bool::from(a.is_zero()) { Scalar::ONE } else { a };
             let a_bi = a.to_biguint().unwrap();
             let inv = a.invert().unwrap();
             let inv_bi = inv.to_biguint().unwrap();
             let m = Scalar::modulus_as_biguint();
             assert_eq!((&inv_bi * &a_bi) % &m, 1.to_biguint().unwrap());
+        }
+
+        #[test]
+        fn fuzzy_invert_vartime(w in scalar()) {
+            let inv: Option<Scalar> = w.invert().into();
+            let inv_vartime: Option<Scalar> = w.invert_vartime().into();
+            assert_eq!(inv, inv_vartime);
+        }
+
+        #[test]
+        fn fuzzy_from_wide_bytes_reduced(bytes_hi in any::<[u8; 32]>(), bytes_lo in any::<[u8; 32]>()) {
+            let m = Scalar::modulus_as_biguint();
+            let mut bytes = [0u8; 64];
+            bytes[0..32].clone_from_slice(&bytes_hi);
+            bytes[32..64].clone_from_slice(&bytes_lo);
+            let s = <Scalar as Reduce<U512>>::reduce(U512::from_be_slice(&bytes));
+            let s_bu = s.to_biguint().unwrap();
+            assert!(s_bu < m);
         }
     }
 }
