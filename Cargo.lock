@@ -20,6 +20,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
+name = "base16ct"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
+
+[[package]]
 name = "base64ct"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -86,7 +92,7 @@ version = "0.3.0-pre"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
- "sec1",
+ "sec1 0.7.3",
  "sha2",
 ]
 
@@ -96,7 +102,7 @@ version = "0.3.0-pre"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
- "sec1",
+ "sec1 0.7.3",
  "sha2",
 ]
 
@@ -340,7 +346,7 @@ dependencies = [
  "hex-literal",
  "pem-rfc7468 0.2.3",
  "rand_core",
- "sec1",
+ "sec1 0.2.1",
  "serde",
  "serde_json",
  "subtle",
@@ -471,7 +477,7 @@ dependencies = [
  "num-traits",
  "proptest",
  "rand_core",
- "sec1",
+ "sec1 0.7.3",
  "sha2",
  "sha3",
 ]
@@ -580,7 +586,7 @@ dependencies = [
  "hex-literal",
  "proptest",
  "rand_core",
- "sec1",
+ "sec1 0.7.3",
  "sha2",
 ]
 
@@ -590,7 +596,7 @@ version = "0.9.0-pre"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
- "sec1",
+ "sec1 0.7.3",
  "sha2",
 ]
 
@@ -877,9 +883,17 @@ dependencies = [
  "der",
  "generic-array",
  "pkcs8",
- "serde",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "sec1"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
+dependencies = [
+ "serdect",
 ]
 
 [[package]]
@@ -923,6 +937,16 @@ checksum = "063bf466a64011ac24040a49009724ee60a57da1b437617ceb32e53ad61bfb19"
 dependencies = [
  "itoa",
  "ryu",
+ "serde",
+]
+
+[[package]]
+name = "serdect"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
+dependencies = [
+ "base16ct",
  "serde",
 ]
 
